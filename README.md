@@ -137,15 +137,5 @@ go test -coverprofile=cover.out ./...
 go tool cover -html=cover.out
 ```
 
-## CI/CD
 
-В `.gitlab-ci.yml` две стадии. Сначала `test`, потом `publish` — только если тесты зелёные.
-Образ уходит в GitLab Container Registry с тегом коммита. Тег `latest` ставится только
-на ветке по умолчанию. Логин в registry — встроенные переменные GitLab, свои секреты
-для этого добавлять не нужно.
 
-## Чего нет
-
-Авторассылка бота не переживает перезапуск. Список монет общий в `model.SupportedCoins`,
-но пары Bybit (`BTCUSDT`, `ETHUSDT`) всё ещё прописаны в клиенте. Журнал пишет Info и Error,
-уровень при старте не переключается.
