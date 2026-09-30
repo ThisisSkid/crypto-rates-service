@@ -1,0 +1,58 @@
+openapi: 3.0.3
+info:
+  title: Курсы BTC и ETH
+  version: 1.0.0
+  description: Курсы читаются из своей базы. Биржу опрашивает фоновый тикер раз в час.
+paths:
+  /rates:
+    get:
+      summary: Последние снимки BTC и ETH
+      responses:
+        "200":
+          description: Список снимков
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Rate"
+  /rates/{coin}:
+    get:
+      summary: Последний снимок одной монеты
+      parameters:
+        - name: coin
+          in: path
+          required: true
+          schema:
+            type: string
+          example: BTC
+      responses:
+        "200":
+          description: Снимок найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Rate"
+        "404":
+          description: Такой монеты в таблице нет
+components:
+  schemas:
+    Rate:
+      type: object
+      properties:
+        CoinSymbol:
+          type: string
+          example: BTC
+        PriceUSD:
+          type: number
+          example: 86000
+        FetchedAt:
+          type: string
+          format: date-time
+        DayMin:
+          type: number
+        DayMax:
+          type: number
+        HourChangePercent:
+          type: number
+          description: Нет поля, если цены час назад ещё нет
