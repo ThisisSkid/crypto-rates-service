@@ -30,7 +30,7 @@ func handleOneRate(rates *service.Service) http.HandlerFunc {
 				http.Error(w, "монета не найдена", http.StatusNotFound)
 				return
 			}
-			// Текст err уходит только в журнал. Клиенту нельзя отдавать детали базы и путей.
+			// Текст err уходит только в журнал. Клиенту не отдаем детал базы и путей.
 			slog.Error("http курс", "coin", coin, "err", err)
 			http.Error(w, "Не удалось получить данные", http.StatusInternalServerError)
 			return

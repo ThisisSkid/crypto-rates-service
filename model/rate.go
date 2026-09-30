@@ -2,6 +2,7 @@ package model
 
 import "time"
 
+
 // SupportedCoins — список монет, которые сервис отслеживает.
 // Единственный источник истины для списка активов.
 var SupportedCoins = []string{"BTC", "ETH"}

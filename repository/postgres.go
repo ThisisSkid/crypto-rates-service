@@ -17,7 +17,7 @@ type Postgres struct {
 	pool *pgxpool.Pool
 }
 
-// Open открывает пул соединений с учебной БД.
+// Open открывает пул соединений с БД.
 // Адрес только из POSTGRES_URL: пароль не храним в исходниках.
 func Open(ctx context.Context) (*Postgres, error) {
 	postgresURL := os.Getenv("POSTGRES_URL")

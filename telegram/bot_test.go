@@ -6,7 +6,6 @@ import (
 )
 
 // Telegram подсвечивает команду только до подчёркивания, поэтому принимаем оба написания,
-// а из упоминания вида /rates@ИмяБота убираем хвост с собачкой.
 func TestSplitCommand(t *testing.T) {
 	tests := []struct {
 		text    string

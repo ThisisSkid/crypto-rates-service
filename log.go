@@ -21,9 +21,8 @@ func setupLogging() (io.Closer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("файл логов: %w", err)
 	}
-	// Используем MultiWriter для записи логов одновременно в файл и консоль.
-	// Closer закрывает только файл, stdout не трогаем.
-	// Text, не JSON: строку можно прочитать глазами.
+	// FIX: MultiWriter дублирует slog в файл и в консоль. Closer закрывает только файл, stdout не трогаем.
+	// Text, не JSON.
 	handler := slog.NewTextHandler(io.MultiWriter(os.Stdout, file), &slog.HandlerOptions{
 		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
 			if attr.Key != slog.TimeKey {
