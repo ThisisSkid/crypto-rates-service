@@ -1,25 +1,41 @@
 # Crypto Rates Service (GO-372)
 
-Сервис раз в час берёт курсы BTC и ETH с Bybit, пишет каждый снимок новой строкой в PostgreSQL
-и отдаёт историю через REST API и Telegram-бота. По этой истории считаются минимум и максимум
-за день и изменение цены за последний час.
+Сервис периодически (по умолчанию раз в час) берёт курсы BTC и ETH с Bybit, пишет каждый снимок новой строкой в PostgreSQL и отдаёт историю через REST API и Telegram-бота. По этой истории считаются минимум и максимум за день и изменение цены за последний час.
 
 ## Архитектура
 
-Папки названы по ролям. По смыслу это тот же разбор по смыслу так же (domain / use case / adapter).
+Проект построен по принципам **Clean Аrchitecture**. Зависимости направлены **внутрь** — внешний слой (адаптеры) знает о внутреннем (domain), но не наоборот.
 
-| Папка | Слои | Что делает |
+| Папка | Слой | Что делает |
 | --- | --- | --- |
-| `model` | domain | Бланк `Rate`, список монет `SupportedCoins`, ошибка `ErrNotFound`. Не знает ни про базу, ни про HTTP. |
-| `service` | use case | Проценты, min/max, текст для бота. Здесь объявлены интерфейсы `Store` и `Exchange`. |
-| `repository`, `client` | adapter | Postgres через `pgxpool` и HTTP к Bybit. Кухня про них не знает. |
-| `httpserver`, `telegram` | delivery | Браузер и бот. SQL тут нет. |
-| `main.go` | composition root | Собирает всех вместе: `service.New(store, client.New())`. Здесь же остановка процесса. |
+| `cmd/app` | composition root | Собирает зависимости: конфиг, логгер, пул БД, сервис, HTTP, бот. Бизнес-логики нет. |
+| `internal/domain` | domain | Сущности (`Rate`), ошибки (`ErrNotFound`), константы (`SupportedCoins`). Не знает ни про базу, ни про HTTP. |
+| `internal/interfaces` | ports (контракты) | Интерфейсы `Store` и `Exchange`. От них зависит `usecase`, их реализуют адаптеры. |
+| `internal/usecase` | use case | Бизнес-логика: проценты, min/max, текст для бота, фоновый тикёр. |
+| `internal/adapter/postgres` | adapter (склад) | Реализация `interfaces.Store` через `pgxpool`. |
+| `internal/adapter/bybit` | adapter (биржа) | Реализация `interfaces.Exchange` через HTTP. |
+| `internal/config` | infrastructure | Загрузка `.env` + переменных окружения через `caarlos0/env`. |
+| `internal/logger` | infrastructure | Настройка `uber-go/zap` с выводом в консоль и файл. |
+| `internal/delivery/httpserver` | delivery | HTTP-роуты через `chi`. |
+| `internal/delivery/telegram` | delivery | Telegram-бот. |
 
-Зависимости идут к центру. Поэтому замена CoinGecko (когда биржа отказывать стала) на Bybit затронула только `client`.
+### Правила архитектуры 
 
-При Ctrl+C процесс ждёт тикер, бота и HTTP, потом закрывает пул и лог. Если за сегодня нет строк,
-`MIN`/`MAX` из базы приходят как NULL — это не ноль и не паника.
+1. **Интерфейсы живут отдельно** — в `internal/interfaces/interfaces.go`. Пакет `usecase` импортирует только `interfaces` и `domain`.
+2. **Адаптеры реализуют интерфейсы** с компиляционной проверкой:
+
+   ```go
+   var _ interfaces.Store = (*PostgresRepo)(nil)
+   var _ interfaces.Exchange = (*BybitClient)(nil)
+   ```
+
+   Если сигнатура в адаптере перестанет совпадать с контрактом — сборка упадёт.
+3. **`main.go` — только Composition Root**: создание пула БД и его пинг происходит именно здесь, в `repo` передаётся уже готовый пул. Бизнес-логики и циклов тикера в `main` нет — это методы сервиса (`svc.Start`, `svc.Refresh`).
+4. **Никакого хардкода**: URL биржи, интервал обновления, уровень логирования, адрес HTTP — всё читается из `.env` через `caarlos0/env`.
+5. **Убрал флаг**: `changePercent` возвращает `(*float64, error)`, без флага `ok bool`. Отсутствие истории (`nil, nil`) обрабатывается явно на уровне `usecase`.
+6. **с. - стиль**: короткие ресиверы `(s *Service)`, `(r *PostgresRepo)`, `(c *BybitClient)`. Конструкторы говорящие: `NewService`, `NewPostgresRepo`, `NewBybitClient`.
+
+При Ctrl+C процесс ждёт тикер, бота и HTTP, потом закрывает пул и лог. Если за сегодня нет строк, `MIN`/`MAX` из базы приходят как NULL — это не ноль и не паника, а доменная ошибка `ErrNotFound`.
 
 ## Технологии
 
@@ -27,13 +43,16 @@
 - PostgreSQL 16, драйвер `jackc/pgx/v5`
 - HTTP: `go-chi/chi/v5`
 - Бот: `go-telegram-bot-api/telegram-bot-api/v5`
-- Логи: `log/slog`, текст в `logs/app.log` и в консоль
+- Конфиг: `caarlos0/env/v11` + `joho/godotenv`
+- Логи: `go.uber.org/zap`, текст в консоль и в `logs/app.log`
 - Docker, Docker Compose
-- GitLab CI: `go vet`, `go test -race -cover`, сборка образа
+- CI: `go vet`, `go test -race -cover` (GitHub Actions / GitLab CI)
 
 Описание REST — в `openapi.yaml`.
 
 ## Запуск
+
+### Через Docker Compose
 
 Нужен Docker Desktop.
 
@@ -43,38 +62,48 @@
    Copy-Item .env.example .env
    ```
 
-2. В `.env` задайте пароль базы. Токен бота от @BotFather можно оставить пустым — тогда
-   поднимется только REST. Файл `.env` в git не попадает.
-
+2. В `.env` задайте пароль базы. Токен бота от @BotFather можно оставить пустым — тогда поднимется только REST. Файл `.env` в git не попадает.
 3. Поднимаем стек:
 
    ```bash
    docker compose up --build
    ```
 
-Compose дождётся готовности Postgres, применит миграцию и откроет `http://localhost:8080`.
-История курсов лежит в томе `pgdata`. 
-Вместе с историей: `docker compose down -v`.
+   Compose дождётся готовности Postgres, применит миграцию и откроет `http://localhost:8080`. История курсов лежит в томе `pgdata`. Вместе с историей:
 
-Проверка:
+   ```bash
+   docker compose down -v
+   ```
 
-```bash
-curl http://localhost:8080/rates
-curl http://localhost:8080/rates/BTC
-```
+### Без Docker (локально)
 
-Первый снимок пишется сразу при старте, дальше каждый час. Процент за час появится,
-когда в базе будет строка старше часа.
+1. Запустить базу (в отдельном терминале):
 
-Без Docker:
+   ```bash
+   docker compose up postgres
+   ```
 
-```bash
-export POSTGRES_URL='postgres://krypto:change-me@localhost:5432/krypto'
-export TELEGRAM_BOT_TOKEN='...'
-go run .
-```
+2. В корне проекта:
+
+   ```bash
+   go run ./cmd/app
+   ```
 
 Без `POSTGRES_URL` процесс сразу выходит: пароля в коде нет.
+
+## Переменные окружения
+
+| Переменная | Обязательна | Значение по умолчанию | Что делает |
+| --- | --- | --- | --- |
+| `POSTGRES_URL` | ✅ | — | DSN для подключения к PostgreSQL |
+| `TELEGRAM_BOT_TOKEN` | ❌ | пусто | Токен от @BotFather; без него бот не стартует |
+| `BYBIT_URL` | ❌ | `https://api.bybit.com/v5/market/tickers?category=spot&symbol=` | Базовый URL публичного API биржи |
+| `HTTP_ADDR` | ❌ | `:8080` | Адрес HTTP-сервера |
+| `UPDATE_INTERVAL` | ❌ | `1h` | Период опроса биржи (например, `15m`, `30s`) |
+| `LOG_LEVEL` | ❌ | `info` | `debug` / `info` / `warn` / `error` |
+| `LOG_FILE` | ❌ | `logs/app.log` | Путь к файлу журнала |
+
+Значения задаются либо в `.env`, либо переменными окружения процесса (Docker подставляет их из `docker-compose.yml`).
 
 ## HTTP
 
@@ -96,7 +125,7 @@ go run .
 }
 ```
 
-`HourChangePercent` будет `null`, пока нет цены старше часа. `FetchedAt` в JSON — UTC.
+Первый снимок пишется сразу при старте, дальше с периодом `UPDATE_INTERVAL` (по умолчанию — раз в час). Поле `HourChangePercent` появится, когда в базе будет строка старше часа — независимо от частоты тикера. `FetchedAt` в JSON — UTC.
 
 ## Telegram
 
@@ -106,17 +135,15 @@ go run .
 | `/rates` | курсы BTC и ETH |
 | `/rates BTC` | одна монета |
 | `/rates_btc`, `/rates_eth` | только биткоин или только эфир |
-| `/start_auto 15` | присылать курсы каждые 15 минут |
+| `/start_auto N` | присылать курсы каждые N минут |
 | `/start_auto_10` | то же с периодом 10 минут |
 | `/stop_auto` | выключить авторассылку |
 
-Telegram подсвечивает команду до подчёркивания, поэтому `/start-auto 15` тоже принимается.
-После перезапуска сервиса рассылку нужно включить снова: она живёт в памяти процесса.
+Telegram подсвечивает команду до подчёркивания, поэтому `/start-auto 15` тоже принимается. После перезапуска сервиса рассылку нужно включить снова: она живёт в памяти процесса.
 
 ## Тесты
 
-По умолчанию без живой базы и без интернета. Вместо Postgres и Bybit стоят заглушки,
-HTTP проверяется через `httptest`.
+По умолчанию без живой базы и без интернета. Вместо Postgres и Bybit стоят заглушки, HTTP проверяется через `httptest`.
 
 ```bash
 go test ./...
@@ -127,7 +154,12 @@ go test -race -cover ./...
 Интеграционный тест склада (NULL от живого Postgres) пропускается без `POSTGRES_TEST_URL`:
 
 ```bash
-POSTGRES_TEST_URL='postgres://krypto:change-me@localhost:5432/krypto' go test ./repository/...
+# Bash
+POSTGRES_TEST_URL='postgres://krypto:change-me@localhost:5432/krypto' go test ./internal/adapter/postgres/...
+
+# PowerShell
+$env:POSTGRES_TEST_URL = "postgres://krypto:change-me@localhost:5432/krypto"
+go test -count=1 -race -cover ./internal/adapter/postgres/...
 ```
 
 Покрытие построчно:
@@ -136,6 +168,3 @@ POSTGRES_TEST_URL='postgres://krypto:change-me@localhost:5432/krypto' go test ./
 go test -coverprofile=cover.out ./...
 go tool cover -html=cover.out
 ```
-
-
-

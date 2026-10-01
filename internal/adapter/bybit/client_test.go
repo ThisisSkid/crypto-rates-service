@@ -1,4 +1,4 @@
-package client
+package bybit
 
 import (
 	"fmt"
@@ -10,19 +10,16 @@ import (
 )
 
 // newTestClient подменяет адрес биржи на локальный сервер: в тестах в интернет не ходим.
-func newTestClient(t *testing.T, handler http.HandlerFunc) *Bybit {
+func newTestClient(t *testing.T, handler http.HandlerFunc) *BybitClient {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-
-	bybit := New()
-	bybit.baseURL = server.URL + "?symbol="
-	return bybit
+	return NewBybitClient(server.URL + "?symbol=")
 }
 
-// Разбор ответа биржи: чужой JSON превращается в наши model.Rate.
+// Разбор ответа биржи: чужой JSON превращается в наши domain.Rate.
 func TestFetchParsesPrices(t *testing.T) {
-	bybit := newTestClient(t, func(w http.ResponseWriter, request *http.Request) {
+	client := newTestClient(t, func(w http.ResponseWriter, request *http.Request) {
 		price := map[string]string{
 			"BTCUSDT": "86000.5",
 			"ETHUSDT": "2100.25",
@@ -31,7 +28,7 @@ func TestFetchParsesPrices(t *testing.T) {
 	})
 
 	before := time.Now()
-	rates, err := bybit.Fetch()
+	rates, err := client.Fetch()
 	if err != nil {
 		t.Fatalf("Fetch вернул ошибку: %v", err)
 	}
@@ -44,7 +41,6 @@ func TestFetchParsesPrices(t *testing.T) {
 	if rates[1].CoinSymbol != "ETH" || rates[1].PriceUSD != 2100.25 {
 		t.Fatalf("второй курс %+v, ждали ETH 2100.25", rates[1])
 	}
-	// Время ставим сами, а не берём у биржи: оба снимка должны получить один момент.
 	if !rates[0].FetchedAt.Equal(rates[1].FetchedAt) {
 		t.Fatal("снимки одного прохода получили разное время")
 	}
@@ -61,34 +57,17 @@ func TestFetchBadAnswers(t *testing.T) {
 		body        string
 		wantErrPart string
 	}{
-		{
-			name:        "лимит запросов исчерпан",
-			status:      http.StatusTooManyRequests,
-			body:        "rate limited",
-			wantErrPart: "биржа ответила кодом 429",
-		},
-		{
-			name:        "биржа сломалась",
-			status:      http.StatusInternalServerError,
-			body:        "oops",
-			wantErrPart: "биржа ответила кодом 500",
-		},
-		{
-			name:        "вместо JSON пришёл мусор",
-			status:      http.StatusOK,
-			body:        "<html>not json</html>",
-			wantErrPart: "invalid character",
-		},
+		{name: "лимит запросов исчерпан", status: http.StatusTooManyRequests, body: "rate limited", wantErrPart: "биржа ответила кодом 429"},
+		{name: "биржа сломалась", status: http.StatusInternalServerError, body: "oops", wantErrPart: "биржа ответила кодом 500"},
+		{name: "вместо JSON пришёл мусор", status: http.StatusOK, body: "<html>not json</html>", wantErrPart: "invalid character"},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			bybit := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(test.status)
 				_, _ = w.Write([]byte(test.body))
 			})
-
-			rates, err := bybit.Fetch()
+			rates, err := client.Fetch()
 			if err == nil {
 				t.Fatalf("ждали ошибку, получили курсы %+v", rates)
 			}
@@ -104,15 +83,14 @@ func TestFetchBadAnswers(t *testing.T) {
 
 // Пустой список Bybit — это ошибка, нулевую цену в базу не пишем.
 func TestFetchMissingCoin(t *testing.T) {
-	bybit := newTestClient(t, func(w http.ResponseWriter, request *http.Request) {
+	client := newTestClient(t, func(w http.ResponseWriter, request *http.Request) {
 		if request.URL.Query().Get("symbol") == "ETHUSDT" {
 			_, _ = w.Write([]byte(`{"retCode":0,"retMsg":"OK","result":{"list":[]}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"retCode":0,"retMsg":"OK","result":{"list":[{"lastPrice":"86000.5"}]}}`))
 	})
-
-	rates, err := bybit.Fetch()
+	rates, err := client.Fetch()
 	if err == nil {
 		t.Fatalf("ждали ошибку, получили %+v", rates)
 	}

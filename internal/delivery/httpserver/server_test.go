@@ -8,41 +8,44 @@ import (
 	"testing"
 	"time"
 
-	"krypto-proekt/model"
-	"krypto-proekt/service"
+	"krypto-proekt/internal/domain"
+	"krypto-proekt/internal/interfaces"
+	"krypto-proekt/internal/usecase"
 )
 
-// fakeStore — склад в памяти. Хендлеры знают только интерфейс service.Store,
+// fakeStore — склад в памяти. Хендлеры знают только интерфейс interfaces.Store,
 // поэтому интеграционный тест маршрутов обходится без Postgres.
 type fakeStore struct {
-	rates map[string]model.Rate
+	rates map[string]domain.Rate
 }
 
-func (store fakeStore) SaveRate(context.Context, model.Rate) error { return nil }
+var _ interfaces.Store = fakeStore{}
 
-func (store fakeStore) LatestRate(_ context.Context, coinSymbol string) (model.Rate, error) {
-	rate, ok := store.rates[coinSymbol]
+func (s fakeStore) SaveRate(context.Context, domain.Rate) error { return nil }
+
+func (s fakeStore) LatestRate(_ context.Context, coinSymbol string) (domain.Rate, error) {
+	rate, ok := s.rates[coinSymbol]
 	if !ok {
-		return model.Rate{}, model.ErrNotFound
+		return domain.Rate{}, domain.ErrNotFound
 	}
 	return rate, nil
 }
 
-func (store fakeStore) DayMinMax(context.Context, string) (float64, float64, error) {
+func (s fakeStore) DayMinMax(context.Context, string) (float64, float64, error) {
 	return 90, 110, nil
 }
 
-func (store fakeStore) PriceHourAgo(context.Context, string) (float64, error) {
+func (s fakeStore) PriceHourAgo(context.Context, string) (float64, error) {
 	return 100, nil
 }
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	store := fakeStore{rates: map[string]model.Rate{
+	store := fakeStore{rates: map[string]domain.Rate{
 		"BTC": {CoinSymbol: "BTC", PriceUSD: 110, FetchedAt: time.Unix(0, 0).UTC()},
 		"ETH": {CoinSymbol: "ETH", PriceUSD: 11, FetchedAt: time.Unix(0, 0).UTC()},
 	}}
-	server := httptest.NewServer(New(service.New(store, nil)))
+	server := httptest.NewServer(New(usecase.NewService(store, nil)))
 	t.Cleanup(server.Close)
 	return server
 }
@@ -50,7 +53,6 @@ func newTestServer(t *testing.T) *httptest.Server {
 // Коды ответов по маршрутам: монета, регистр, неизвестная монета и список.
 func TestRatesStatusCodes(t *testing.T) {
 	server := newTestServer(t)
-
 	tests := []struct {
 		name       string
 		path       string
@@ -61,7 +63,6 @@ func TestRatesStatusCodes(t *testing.T) {
 		{name: "неизвестной монеты нет в таблице", path: "/rates/DOGE", wantStatus: http.StatusNotFound},
 		{name: "список курсов", path: "/rates", wantStatus: http.StatusOK},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			response, err := server.Client().Get(server.URL + test.path)
@@ -80,21 +81,18 @@ func TestRatesStatusCodes(t *testing.T) {
 // включая min/max за день и процент за час.
 func TestRateBTCJSON(t *testing.T) {
 	server := newTestServer(t)
-
 	response, err := server.Client().Get(server.URL + "/rates/BTC")
 	if err != nil {
 		t.Fatalf("запрос не ушёл: %v", err)
 	}
 	defer response.Body.Close()
-
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("получили код %d, ждали 200", response.StatusCode)
 	}
 	if contentType := response.Header.Get("Content-Type"); contentType != "application/json" {
 		t.Fatalf("получили Content-Type %q, ждали application/json", contentType)
 	}
-
-	var quote service.Quote
+	var quote usecase.Quote
 	err = json.NewDecoder(response.Body).Decode(&quote)
 	if err != nil {
 		t.Fatalf("тело не разобралось: %v", err)
@@ -114,14 +112,12 @@ func TestRateBTCJSON(t *testing.T) {
 // Список отдаёт обе монеты.
 func TestRatesListJSON(t *testing.T) {
 	server := newTestServer(t)
-
 	response, err := server.Client().Get(server.URL + "/rates")
 	if err != nil {
 		t.Fatalf("запрос не ушёл: %v", err)
 	}
 	defer response.Body.Close()
-
-	var quotes []service.Quote
+	var quotes []usecase.Quote
 	err = json.NewDecoder(response.Body).Decode(&quotes)
 	if err != nil {
 		t.Fatalf("тело не разобралось: %v", err)

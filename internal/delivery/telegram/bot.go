@@ -3,17 +3,16 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"go.uber.org/zap"
 
-	"krypto-proekt/model"
-	"krypto-proekt/service"
+	"krypto-proekt/internal/domain"
+	"krypto-proekt/internal/usecase"
 )
 
 // defaultAutoMinutes — период авторассылки, если клиент не назвал своё число.
@@ -26,41 +25,39 @@ type chatAuto struct {
 	workers sync.WaitGroup
 }
 
-// Start запускает бота в фоне, если задан TELEGRAM_BOT_TOKEN.
+// Start запускает бота в фоне, если задан токен.
 // Пустой токен не роняет HTTP.
 // Возвращает ожидание: main дождётся выхода горутин бота, прежде чем закрывать пул и лог.
-func Start(ctx context.Context, rates *service.Service) (wait func()) {
-	token := os.Getenv("TELEGRAM_BOT_TOKEN")
+func Start(ctx context.Context, rates *usecase.Service, token string) (wait func()) {
 	if token == "" {
-		fmt.Println("бот выключен: нет переменной TELEGRAM_BOT_TOKEN")
+		zap.S().Info("бот выключен: токен не задан")
 		return func() {}
 	}
-
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
-		fmt.Println("бот:", err)
+		zap.S().Errorw("бот не запустился", "err", err)
 		return func() {}
 	}
-	fmt.Println("бот запущен:", bot.Self.UserName)
+	zap.S().Infow("бот запущен", "user", bot.Self.UserName)
+
 	_, err = bot.Request(tgbotapi.NewSetMyCommands(
 		tgbotapi.BotCommand{Command: "start", Description: "Список команд"},
 		tgbotapi.BotCommand{Command: "rates", Description: "Курсы BTC и ETH"},
 		tgbotapi.BotCommand{Command: "rates_btc", Description: "Только биткоин"},
 		tgbotapi.BotCommand{Command: "rates_eth", Description: "Только эфир"},
-		// Команда с аргументом есть в меню: пример /start_auto 15.
 		tgbotapi.BotCommand{Command: "start_auto", Description: "Авторассылка каждые N минут (пример: /start_auto 15)"},
 		tgbotapi.BotCommand{Command: "start_auto_10", Description: "Авторассылка каждые 10 минут"},
 		tgbotapi.BotCommand{Command: "stop_auto", Description: "Остановить авторассылку"},
 	))
 	if err != nil {
-		fmt.Println("команды бота:", err)
+		zap.S().Errorw("команды бота", "err", err)
 	}
 
 	updatesConfig := tgbotapi.NewUpdate(0)
 	updatesConfig.Timeout = 30
 	updates := bot.GetUpdatesChan(updatesConfig)
-	autos := &chatAuto{cancel: make(map[int64]context.CancelFunc)}
 
+	autos := &chatAuto{cancel: make(map[int64]context.CancelFunc)}
 	var poll sync.WaitGroup
 	poll.Add(1)
 	go func() {
@@ -79,12 +76,11 @@ func Start(ctx context.Context, rates *service.Service) (wait func()) {
 					continue
 				}
 				command, _ := splitCommand(update.Message.Text)
-				slog.Info("бот команда", "command", command, "chat", update.Message.Chat.ID)
+				zap.S().Infow("бот команда", "command", command, "chat", update.Message.Chat.ID)
 				text := reply(ctx, rates, bot, autos, update.Message)
 				message := tgbotapi.NewMessage(update.Message.Chat.ID, text)
-				_, err := bot.Send(message)
-				if err != nil {
-					slog.Error("бот отправка", "err", err)
+				if _, err := bot.Send(message); err != nil {
+					zap.S().Errorw("бот отправка", "err", err)
 				}
 			}
 		}
@@ -98,16 +94,15 @@ func Start(ctx context.Context, rates *service.Service) (wait func()) {
 
 // start включает авторассылку для одного чата. Прежнюю рассылку этого чата сначала гасим,
 // иначе клиент получал бы курсы дважды с двумя разными периодами.
-func (auto *chatAuto) start(ctx context.Context, rates *service.Service, bot *tgbotapi.BotAPI, chatID int64, minutes int) {
-	auto.stop(chatID)
+func (a *chatAuto) start(ctx context.Context, rates *usecase.Service, bot *tgbotapi.BotAPI, chatID int64, minutes int) {
+	a.stop(chatID)
 	runCtx, cancel := context.WithCancel(ctx)
-	auto.mu.Lock()
-	auto.cancel[chatID] = cancel
-	auto.mu.Unlock()
-
-	auto.workers.Add(1)
+	a.mu.Lock()
+	a.cancel[chatID] = cancel
+	a.mu.Unlock()
+	a.workers.Add(1)
 	go func() {
-		defer auto.workers.Done()
+		defer a.workers.Done()
 		ticker := time.NewTicker(time.Duration(minutes) * time.Minute)
 		defer ticker.Stop()
 		for {
@@ -115,11 +110,10 @@ func (auto *chatAuto) start(ctx context.Context, rates *service.Service, bot *tg
 			case <-runCtx.Done():
 				return
 			case <-ticker.C:
-				text := rates.Report(runCtx, model.SupportedCoins)
+				text := rates.Report(runCtx, domain.SupportedCoins)
 				message := tgbotapi.NewMessage(chatID, text)
-				_, err := bot.Send(message)
-				if err != nil {
-					slog.Error("авторассылка", "chat", chatID, "err", err)
+				if _, err := bot.Send(message); err != nil {
+					zap.S().Errorw("авторассылка", "chat", chatID, "err", err)
 				}
 			}
 		}
@@ -127,28 +121,28 @@ func (auto *chatAuto) start(ctx context.Context, rates *service.Service, bot *tg
 }
 
 // stop выключает авторассылку чата и сообщает, была ли она включена.
-func (auto *chatAuto) stop(chatID int64) bool {
-	auto.mu.Lock()
-	defer auto.mu.Unlock()
-	cancel, ok := auto.cancel[chatID]
+func (a *chatAuto) stop(chatID int64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cancel, ok := a.cancel[chatID]
 	if !ok {
 		return false
 	}
 	cancel()
-	delete(auto.cancel, chatID)
+	delete(a.cancel, chatID)
 	return true
 }
 
 // reply разбирает команду и возвращает текст ответа. Отправкой занимается вызывающая горутина,
 // поэтому здесь нет ни сети, ни SQL — только выбор ветки и вызовы обработки.
-func reply(ctx context.Context, rates *service.Service, bot *tgbotapi.BotAPI, autos *chatAuto, message *tgbotapi.Message) string {
+func reply(ctx context.Context, rates *usecase.Service, bot *tgbotapi.BotAPI, autos *chatAuto, message *tgbotapi.Message) string {
 	command, arg := splitCommand(message.Text)
 	switch command {
 	case "/start":
 		return commandHelp()
 	case "/rates":
 		if arg == "" {
-			return rates.Report(ctx, model.SupportedCoins)
+			return rates.Report(ctx, domain.SupportedCoins)
 		}
 		return rates.Report(ctx, []string{strings.ToUpper(arg)})
 	case "/btc", "/rates-btc":
@@ -175,7 +169,7 @@ func reply(ctx context.Context, rates *service.Service, bot *tgbotapi.BotAPI, au
 	}
 }
 
-// commandHelp — текст для /start и для нераспознанной команды
+// commandHelp — текст для /start и для нераспознанной команды.
 func commandHelp() string {
 	return strings.Join([]string{
 		"/start — показать этот список",
@@ -194,11 +188,11 @@ func autoMinutes(arg string) (minutes int, ok bool) {
 	if arg == "" {
 		return defaultAutoMinutes, true
 	}
-	minutes, err := strconv.Atoi(arg)
-	if err != nil || minutes < 1 {
+	parsed, err := strconv.Atoi(arg)
+	if err != nil || parsed < 1 {
 		return 0, false
 	}
-	return minutes, true
+	return parsed, true
 }
 
 // splitCommand достаёт из сообщения команду и её аргумент.
@@ -211,7 +205,7 @@ func splitCommand(text string) (command string, arg string) {
 	if at := strings.Index(command, "@"); at >= 0 {
 		command = command[:at]
 	}
-	// Telegram красит команду только до дефиса, поэтому /start_auto тоже принимаем.
+	// Telegram парсит только до дефиса, поэтому /start_auto тоже принимает.
 	command = strings.ReplaceAll(command, "_", "-")
 	if len(fields) > 1 {
 		arg = fields[1]

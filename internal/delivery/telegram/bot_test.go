@@ -8,20 +8,23 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
-	"krypto-proekt/model"
-	"krypto-proekt/service"
+	"krypto-proekt/internal/domain"
+	"krypto-proekt/internal/interfaces"
+	"krypto-proekt/internal/usecase"
 )
 
 // replyStore — минимальный склад: в таблице есть только BTC.
 type replyStore struct{}
 
-func (replyStore) SaveRate(context.Context, model.Rate) error { return nil }
+var _ interfaces.Store = replyStore{}
 
-func (replyStore) LatestRate(_ context.Context, coinSymbol string) (model.Rate, error) {
+func (replyStore) SaveRate(context.Context, domain.Rate) error { return nil }
+
+func (replyStore) LatestRate(_ context.Context, coinSymbol string) (domain.Rate, error) {
 	if coinSymbol != "BTC" {
-		return model.Rate{}, model.ErrNotFound
+		return domain.Rate{}, domain.ErrNotFound
 	}
-	return model.Rate{CoinSymbol: "BTC", PriceUSD: 110, FetchedAt: time.Unix(0, 0).UTC()}, nil
+	return domain.Rate{CoinSymbol: "BTC", PriceUSD: 110, FetchedAt: time.Unix(0, 0).UTC()}, nil
 }
 
 func (replyStore) DayMinMax(context.Context, string) (float64, float64, error) { return 90, 110, nil }
@@ -34,8 +37,7 @@ func testMessage(text string) *tgbotapi.Message {
 
 // Маршрутизация команд из ТЗ. bot здесь не нужен: отправкой занимается вызывающая горутина.
 func TestReplyRoutesCommands(t *testing.T) {
-	rates := service.New(replyStore{}, nil)
-
+	rates := usecase.NewService(replyStore{}, nil)
 	tests := []struct {
 		name     string
 		text     string
@@ -51,7 +53,6 @@ func TestReplyRoutesCommands(t *testing.T) {
 		{name: "выключение без включения", text: "/stop_auto", contains: "Авторассылка не была включена"},
 		{name: "мусор вместо минут", text: "/start_auto пять", contains: "Пример: /start_auto 15"},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			autos := &chatAuto{cancel: make(map[int64]context.CancelFunc)}
@@ -68,12 +69,10 @@ func TestReplyRoutesCommands(t *testing.T) {
 func TestReplyStartAuto15(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	autos := &chatAuto{cancel: make(map[int64]context.CancelFunc)}
-	rates := service.New(replyStore{}, nil)
-	message := testMessage("/start_auto 15")
+	rates := usecase.NewService(replyStore{}, nil)
 
-	started := reply(ctx, rates, nil, autos, message)
+	started := reply(ctx, rates, nil, autos, testMessage("/start_auto 15"))
 	if !strings.Contains(started, "каждые 15 мин") {
 		t.Fatalf("ждали период 15 минут, получили: %s", started)
 	}
@@ -88,7 +87,6 @@ func TestReplyStartAuto15(t *testing.T) {
 	if !strings.Contains(stopped, "Авторассылка выключена") {
 		t.Fatalf("ждали выключение, получили: %s", stopped)
 	}
-
 	cancel()
 	autos.workers.Wait()
 }
@@ -97,13 +95,11 @@ func TestReplyStartAuto15(t *testing.T) {
 func TestReplyStartAutoDefault(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	autos := &chatAuto{cancel: make(map[int64]context.CancelFunc)}
-	text := reply(ctx, service.New(replyStore{}, nil), nil, autos, testMessage("/start_auto_10"))
+	text := reply(ctx, usecase.NewService(replyStore{}, nil), nil, autos, testMessage("/start_auto_10"))
 	if !strings.Contains(text, "каждые 10 мин") {
 		t.Fatalf("ждали период 10 минут, получили: %s", text)
 	}
-
 	cancel()
 	autos.workers.Wait()
 }

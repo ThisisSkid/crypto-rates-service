@@ -1,7 +1,6 @@
-package model
+package domain
 
 import "time"
-
 
 // SupportedCoins — список монет, которые сервис отслеживает.
 // Единственный источник истины для списка активов.

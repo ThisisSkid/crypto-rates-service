@@ -1,4 +1,4 @@
-package repository
+package postgres
 
 import (
 	"context"
@@ -6,14 +6,15 @@ import (
 	"os"
 	"testing"
 
-	"krypto-proekt/model"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"krypto-proekt/internal/domain"
 )
 
 // Агрегаты MIN/MAX по пустой выборке возвращают NULL, поэтому Scan идёт в *float64.
 // Таблица проверяет все четыре комбинации NULL: одного nil достаточно, чтобы отдать ErrNotFound.
 func TestDayMinMax(t *testing.T) {
 	low, high := 90.0, 110.0
-
 	tests := []struct {
 		name    string
 		minPtr  *float64
@@ -23,12 +24,11 @@ func TestDayMinMax(t *testing.T) {
 		wantErr error
 	}{
 		{name: "есть строки за сегодня", minPtr: &low, maxPtr: &high, wantMin: 90, wantMax: 110},
-		{name: "пустая выборка, оба NULL", wantErr: model.ErrNotFound},
-		{name: "NULL только в минимуме", maxPtr: &high, wantErr: model.ErrNotFound},
-		{name: "NULL только в максимуме", minPtr: &low, wantErr: model.ErrNotFound},
+		{name: "пустая выборка, оба NULL", wantErr: domain.ErrNotFound},
+		{name: "NULL только в минимуме", maxPtr: &high, wantErr: domain.ErrNotFound},
+		{name: "NULL только в максимуме", minPtr: &low, wantErr: domain.ErrNotFound},
 		{name: "одна строка, минимум равен максимуму", minPtr: &high, maxPtr: &high, wantMin: 110, wantMax: 110},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			minPrice, maxPrice, err := dayMinMax(test.minPtr, test.maxPtr)
@@ -49,17 +49,16 @@ func TestDayMinMaxOnRealPostgres(t *testing.T) {
 	if testURL == "" {
 		t.Skip("нет POSTGRES_TEST_URL, пропускаем интеграционный тест")
 	}
-	t.Setenv("POSTGRES_URL", testURL)
-
 	ctx := context.Background()
-	store, err := Open(ctx)
+	pool, err := pgxpool.New(ctx, testURL)
 	if err != nil {
 		t.Fatalf("не открылся пул: %v", err)
 	}
-	defer store.Close()
+	defer pool.Close()
 
-	_, _, err = store.DayMinMax(ctx, "МОНЕТЫ-С-ТАКИМ-ИМЕНЕМ-НЕТ")
-	if !errors.Is(err, model.ErrNotFound) {
+	repo := NewPostgresRepo(pool)
+	_, _, err = repo.DayMinMax(ctx, "МОНЕТЫ-С-ТАКИМ-ИМЕНЕМ-НЕТ")
+	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("на пустой выборке ждали ErrNotFound, получили %v", err)
 	}
 }
