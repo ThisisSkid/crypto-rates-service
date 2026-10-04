@@ -4,24 +4,24 @@
 
 ## Архитектура
 
-Проект построен по принципам **Clean Аrchitecture**. Зависимости направлены **внутрь** — внешний слой (адаптеры) знает о внутреннем (domain), но не наоборот.
+Проект построен по принципам **Clean Architecture**. Зависимости направлены **внутрь** — внешний слой (адаптеры) знает о внутреннем (domain), но не наоборот.
 
 | Папка | Слой | Что делает |
 | --- | --- | --- |
 | `cmd/app` | composition root | Собирает зависимости: конфиг, логгер, пул БД, сервис, HTTP, бот. Бизнес-логики нет. |
 | `internal/domain` | domain | Сущности (`Rate`), ошибки (`ErrNotFound`), константы (`SupportedCoins`). Не знает ни про базу, ни про HTTP. |
-| `internal/interfaces` | ports (контракты) | Интерфейсы `Store` и `Exchange`. От них зависит `usecase`, их реализуют адаптеры. |
+| `internal/interfaces` | ports (контракты) | Интерфейсы `Store`, `Exchange`, `Logger`. От них зависит `usecase`, их реализуют адаптеры. |
 | `internal/usecase` | use case | Бизнес-логика: проценты, min/max, текст для бота, фоновый тикёр. |
 | `internal/adapter/postgres` | adapter (склад) | Реализация `interfaces.Store` через `pgxpool`. |
-| `internal/adapter/bybit` | adapter (биржа) | Реализация `interfaces.Exchange` через HTTP. |
+| `internal/adapter/bybit` | adapter (биржа) | Реализация `interfaces.Exchange` через HTTP с поддержкой отмены по контексту. |
 | `internal/config` | infrastructure | Загрузка `.env` + переменных окружения через `caarlos0/env`. |
 | `internal/logger` | infrastructure | Настройка `uber-go/zap` с выводом в консоль и файл. |
 | `internal/delivery/httpserver` | delivery | HTTP-роуты через `chi`. |
 | `internal/delivery/telegram` | delivery | Telegram-бот. |
 
-### Правила архитектуры 
+### Правила архитектуры
 
-1. **Интерфейсы живут отдельно** — в `internal/interfaces/interfaces.go`. Пакет `usecase` импортирует только `interfaces` и `domain`.
+1. **Интерфейсы живут отдельно** — в `internal/interfaces/interfaces.go`. Пакет `usecase` импортирует только `interfaces` и `domain`, не зная о конкретных библиотеках (zap, pgx, http).
 2. **Адаптеры реализуют интерфейсы** с компиляционной проверкой:
 
    ```go
@@ -32,10 +32,12 @@
    Если сигнатура в адаптере перестанет совпадать с контрактом — сборка упадёт.
 3. **`main.go` — только Composition Root**: создание пула БД и его пинг происходит именно здесь, в `repo` передаётся уже готовый пул. Бизнес-логики и циклов тикера в `main` нет — это методы сервиса (`svc.Start`, `svc.Refresh`).
 4. **Никакого хардкода**: URL биржи, интервал обновления, уровень логирования, адрес HTTP — всё читается из `.env` через `caarlos0/env`.
-5. **Убрал флаг**: `changePercent` возвращает `(*float64, error)`, без флага `ok bool`. Отсутствие истории (`nil, nil`) обрабатывается явно на уровне `usecase`.
-6. **с. - стиль**: короткие ресиверы `(s *Service)`, `(r *PostgresRepo)`, `(c *BybitClient)`. Конструкторы говорящие: `NewService`, `NewPostgresRepo`, `NewBybitClient`.
+5. **Математика без костылей**: `changePercent` возвращает `*float64`, без флага `ok bool`. Отсутствие истории (`nil`) обрабатывается явно на уровне `usecase`.
+6. **Go-стиль**: короткие ресиверы `(s *Service)`, `(r *PostgresRepo)`, `(c *BybitClient)`. Конструкторы говорящие: `NewService`, `NewPostgresRepo`, `NewBybitClient`.
+7. **Один источник истины для монет**: список `domain.SupportedCoins` используется и в HTTP, и в боте, и в клиенте Bybit. Добавление новой монеты требует изменения только в одном месте.
+8. **Граница суток в одном месте**: «сегодня» считается по Москве и в SQL, и в тексте для человека, поэтому нет расхождений на 3 часа.
 
-При Ctrl+C процесс ждёт тикер, бота и HTTP, потом закрывает пул и лог. Если за сегодня нет строк, `MIN`/`MAX` из базы приходят как NULL — это не ноль и не паника, а доменная ошибка `ErrNotFound`.
+При Ctrl+C процесс ждёт тикер, бота и HTTP, потом закрывает пул и лог. Если за сегодня нет строк, `MIN`/`MAX` из базы приходят как NULL — это не ноль и не паника, а доменная ошибка `ErrNotFound`, которая в JSON превращается в `null`.
 
 ## Технологии
 
@@ -46,7 +48,7 @@
 - Конфиг: `caarlos0/env/v11` + `joho/godotenv`
 - Логи: `go.uber.org/zap`, текст в консоль и в `logs/app.log`
 - Docker, Docker Compose
-- CI: `go vet`, `go test -race -cover` (GitHub Actions / GitLab CI)
+- CI: `go vet`, `go test -race -cover` (GitHub Actions)
 
 Описание REST — в `openapi.yaml`.
 
@@ -95,13 +97,13 @@
 
 | Переменная | Обязательна | Значение по умолчанию | Что делает |
 | --- | --- | --- | --- |
-| `POSTGRES_URL` | ✅ | — | DSN для подключения к PostgreSQL |
-| `TELEGRAM_BOT_TOKEN` | ❌ | пусто | Токен от @BotFather; без него бот не стартует |
+| `POSTGRES_URL` | ✅ | — | Строка подключения к PostgreSQL (например, `postgres://user:pass@host:5432/db`) |
+| `TELEGRAM_BOT_TOKEN` | ❌ | пусто | Токен от @BotFather; без него бот не стартует, но HTTP работает |
 | `BYBIT_URL` | ❌ | `https://api.bybit.com/v5/market/tickers?category=spot&symbol=` | Базовый URL публичного API биржи |
-| `HTTP_ADDR` | ❌ | `:8080` | Адрес HTTP-сервера |
-| `UPDATE_INTERVAL` | ❌ | `1h` | Период опроса биржи (например, `15m`, `30s`) |
-| `LOG_LEVEL` | ❌ | `info` | `debug` / `info` / `warn` / `error` |
-| `LOG_FILE` | ❌ | `logs/app.log` | Путь к файлу журнала |
+| `HTTP_ADDR` | ❌ | `:8080` | Адрес HTTP-сервера (например, `:8080` или `127.0.0.1:9000`) |
+| `UPDATE_INTERVAL` | ❌ | `1h` | Период опроса биржи (например, `15m`, `30s`, `2h`) |
+| `LOG_LEVEL` | ❌ | `info` | Уровень логирования: `debug` / `info` / `warn` / `error` |
+| `LOG_FILE` | ❌ | `logs/app.log` | Путь к файлу журнала (папка создаётся автоматически) |
 
 Значения задаются либо в `.env`, либо переменными окружения процесса (Docker подставляет их из `docker-compose.yml`).
 
@@ -125,7 +127,11 @@
 }
 ```
 
-Первый снимок пишется сразу при старте, дальше с периодом `UPDATE_INTERVAL` (по умолчанию — раз в час). Поле `HourChangePercent` появится, когда в базе будет строка старше часа — независимо от частоты тикера. `FetchedAt` в JSON — UTC.
+Первый снимок пишется сразу при старте, дальше с периодом `UPDATE_INTERVAL` (по умолчанию — раз в час). Поля `DayMin`, `DayMax` и `HourChangePercent` будут `null`, если:
+- за сегодня нет ни одной строки (`DayMin`, `DayMax`);
+- нет цены старше часа (`HourChangePercent`).
+
+`FetchedAt` в JSON — UTC.
 
 ## Telegram
 

@@ -37,7 +37,7 @@ func testMessage(text string) *tgbotapi.Message {
 
 // Маршрутизация команд из ТЗ. bot здесь не нужен: отправкой занимается вызывающая горутина.
 func TestReplyRoutesCommands(t *testing.T) {
-	rates := usecase.NewService(replyStore{}, nil)
+	rates := usecase.NewService(replyStore{}, nil, nil)
 	tests := []struct {
 		name     string
 		text     string
@@ -70,7 +70,7 @@ func TestReplyStartAuto15(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	autos := &chatAuto{cancel: make(map[int64]context.CancelFunc)}
-	rates := usecase.NewService(replyStore{}, nil)
+	rates := usecase.NewService(replyStore{}, nil, nil)
 
 	started := reply(ctx, rates, nil, autos, testMessage("/start_auto 15"))
 	if !strings.Contains(started, "каждые 15 мин") {
@@ -96,7 +96,7 @@ func TestReplyStartAutoDefault(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	autos := &chatAuto{cancel: make(map[int64]context.CancelFunc)}
-	text := reply(ctx, usecase.NewService(replyStore{}, nil), nil, autos, testMessage("/start_auto_10"))
+	text := reply(ctx, usecase.NewService(replyStore{}, nil, nil), nil, autos, testMessage("/start_auto_10"))
 	if !strings.Contains(text, "каждые 10 мин") {
 		t.Fatalf("ждали период 10 минут, получили: %s", text)
 	}

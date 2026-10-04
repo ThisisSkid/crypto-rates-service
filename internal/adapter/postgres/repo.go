@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -51,15 +52,20 @@ func (r *PostgresRepo) LatestRate(ctx context.Context, coinSymbol string) (domai
 	return rate, err
 }
 
-// DayMinMax — минимум и максимум цены монеты с полуночи сегодня.
+// DayMinMax — минимум и максимум цены монеты с полуночи сегодня по Москве.
+// Граница суток считается здесь тем же поясом, что и текст для человека,
+// поэтому «сегодня» в SQL и «сегодня» в сообщении бота не расходятся.
 func (r *PostgresRepo) DayMinMax(ctx context.Context, coinSymbol string) (float64, float64, error) {
+	now := time.Now().In(domain.Moscow)
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, domain.Moscow)
+
 	var minPtr, maxPtr *float64
 	err := r.pool.QueryRow(ctx,
 		`SELECT MIN(price_usd), MAX(price_usd)
 		 FROM rates
 		 WHERE coin_symbol = $1
-		   AND fetched_at >= date_trunc('day', NOW())`,
-		coinSymbol,
+		   AND fetched_at >= $2`,
+		coinSymbol, dayStart,
 	).Scan(&minPtr, &maxPtr)
 	if err != nil {
 		return 0, 0, err

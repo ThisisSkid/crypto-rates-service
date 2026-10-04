@@ -40,20 +40,20 @@ func TestQuote(t *testing.T) {
 	svc := NewService(&memoryStore{
 		rate: domain.Rate{CoinSymbol: "BTC", PriceUSD: 110, FetchedAt: time.Unix(0, 0).UTC()},
 		old:  100,
-	}, nil)
+	}, nil, nil)
 
 	quote, err := svc.Quote(context.Background(), "BTC")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if quote.DayMin != 90 || quote.DayMax != 110 {
+	if quote.DayMin == nil || quote.DayMax == nil || *quote.DayMin != 90 || *quote.DayMax != 110 {
 		t.Fatalf("wrong min/max: %+v", quote)
 	}
 	if quote.HourChangePercent == nil || *quote.HourChangePercent != 10 {
 		t.Fatalf("wrong percent: %v", quote.HourChangePercent)
 	}
 
-	missing := NewService(&memoryStore{miss: true}, nil)
+	missing := NewService(&memoryStore{miss: true}, nil, nil)
 	_, err = missing.Quote(context.Background(), "DOGE")
 	if err != domain.ErrNotFound {
 		t.Fatalf("ждали отсутствие строки, получили %v", err)

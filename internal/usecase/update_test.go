@@ -17,7 +17,7 @@ type stubExchange struct {
 
 var _ interfaces.Exchange = (*stubExchange)(nil)
 
-func (e *stubExchange) Fetch() ([]domain.Rate, error) { return e.rates, e.err }
+func (e *stubExchange) Fetch(context.Context) ([]domain.Rate, error) { return e.rates, e.err }
 
 // saveStore считает записи и умеет ломаться на записи
 type saveStore struct {
@@ -59,7 +59,7 @@ func TestUpdate(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := &saveStore{saveErr: test.saveErr}
-			svc := NewService(store, test.exchange)
+			svc := NewService(store, test.exchange, nil)
 
 			rates, err := svc.Update(context.Background())
 			if !errors.Is(err, test.wantErr) {

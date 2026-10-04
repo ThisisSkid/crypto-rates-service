@@ -45,7 +45,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 		"BTC": {CoinSymbol: "BTC", PriceUSD: 110, FetchedAt: time.Unix(0, 0).UTC()},
 		"ETH": {CoinSymbol: "ETH", PriceUSD: 11, FetchedAt: time.Unix(0, 0).UTC()},
 	}}
-	server := httptest.NewServer(New(usecase.NewService(store, nil)))
+	server := httptest.NewServer(New(usecase.NewService(store, nil, nil)))
 	t.Cleanup(server.Close)
 	return server
 }
@@ -100,7 +100,8 @@ func TestRateBTCJSON(t *testing.T) {
 	if quote.CoinSymbol != "BTC" || quote.PriceUSD != 110 {
 		t.Fatalf("получили снимок %+v", quote.Rate)
 	}
-	if quote.DayMin != 90 || quote.DayMax != 110 {
+	// DayMin/DayMax теперь указатели: разыменовываем перед сравнением.
+	if quote.DayMin == nil || quote.DayMax == nil || *quote.DayMin != 90 || *quote.DayMax != 110 {
 		t.Fatalf("получили min/max %v..%v, ждали 90..110", quote.DayMin, quote.DayMax)
 	}
 	// Цена час назад 100, текущая 110, значит рост ровно на 10 процентов.

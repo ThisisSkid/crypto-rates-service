@@ -93,7 +93,7 @@ func TestReport(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			svc := NewService(test.store, nil)
+			svc := NewService(test.store, nil, nil)
 			text := svc.Report(context.Background(), test.symbols)
 			for _, want := range test.contains {
 				if !strings.Contains(text, want) {
@@ -109,7 +109,7 @@ func TestStatsText(t *testing.T) {
 		rates:      map[string]domain.Rate{"BTC": testBTC},
 		hourPrices: map[string]float64{"BTC": 100},
 	}
-	svc := NewService(store, nil)
+	svc := NewService(store, nil, nil)
 	text := svc.StatsText(context.Background(), testBTC)
 
 	for _, want := range []string{"за день min=90 max=110", "за час изменение=10.00%"} {
@@ -121,7 +121,7 @@ func TestStatsText(t *testing.T) {
 
 func TestQuotesSkipMissingCoin(t *testing.T) {
 	store := &reportStore{rates: map[string]domain.Rate{"BTC": testBTC}}
-	svc := NewService(store, nil)
+	svc := NewService(store, nil, nil)
 
 	quotes, err := svc.Quotes(context.Background(), []string{"BTC", "DOGE"})
 	if err != nil {

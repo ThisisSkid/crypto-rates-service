@@ -1,6 +1,7 @@
 package bybit
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -28,7 +29,7 @@ func TestFetchParsesPrices(t *testing.T) {
 	})
 
 	before := time.Now()
-	rates, err := client.Fetch()
+	rates, err := client.Fetch(context.Background())
 	if err != nil {
 		t.Fatalf("Fetch вернул ошибку: %v", err)
 	}
@@ -67,7 +68,7 @@ func TestFetchBadAnswers(t *testing.T) {
 				w.WriteHeader(test.status)
 				_, _ = w.Write([]byte(test.body))
 			})
-			rates, err := client.Fetch()
+			rates, err := client.Fetch(context.Background())
 			if err == nil {
 				t.Fatalf("ждали ошибку, получили курсы %+v", rates)
 			}
@@ -90,7 +91,7 @@ func TestFetchMissingCoin(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"retCode":0,"retMsg":"OK","result":{"list":[{"lastPrice":"86000.5"}]}}`))
 	})
-	rates, err := client.Fetch()
+	rates, err := client.Fetch(context.Background())
 	if err == nil {
 		t.Fatalf("ждали ошибку, получили %+v", rates)
 	}

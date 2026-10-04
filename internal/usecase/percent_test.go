@@ -11,7 +11,6 @@ func TestChangePercent(t *testing.T) {
 		currentPrice float64
 		oldPrice     float64
 		wantPercent  *float64
-		wantErr      bool
 	}{
 		{name: "рост", currentPrice: 110, oldPrice: 100, wantPercent: ptr(10)},
 		{name: "падение", currentPrice: 90, oldPrice: 100, wantPercent: ptr(-10)},
@@ -19,10 +18,7 @@ func TestChangePercent(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			gotPercent, err := changePercent(test.currentPrice, test.oldPrice)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("ошибка: получили %v, ждали ошибку: %v", err, test.wantErr)
-			}
+			gotPercent := changePercent(test.currentPrice, test.oldPrice)
 			if test.wantPercent == nil && gotPercent != nil {
 				t.Fatalf("ждали nil, получили %v", *gotPercent)
 			}

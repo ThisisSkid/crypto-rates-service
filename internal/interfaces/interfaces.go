@@ -16,6 +16,14 @@ type Store interface {
 }
 
 // Exchange — контракт для получения курсов с биржи.
+// Context внутри: Ctrl+C обязан уметь обрывать поход на биржу.
 type Exchange interface {
-	Fetch() ([]domain.Rate, error)
+	Fetch(ctx context.Context) ([]domain.Rate, error)
+}
+
+// Logger — контракт логирования для сценариев.
+// UseCase не знает о конкретной библиотеке логов.
+type Logger interface {
+	Info(msg string, kv ...any)
+	Error(msg string, kv ...any)
 }

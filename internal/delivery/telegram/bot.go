@@ -123,13 +123,16 @@ func (a *chatAuto) start(ctx context.Context, rates *usecase.Service, bot *tgbot
 // stop выключает авторассылку чата и сообщает, была ли она включена.
 func (a *chatAuto) stop(chatID int64) bool {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	cancel, ok := a.cancel[chatID]
 	if !ok {
+		a.mu.Unlock()
 		return false
 	}
-	cancel()
 	delete(a.cancel, chatID)
+	a.mu.Unlock()
+
+	cancel()
+	a.workers.Wait()
 	return true
 }
 

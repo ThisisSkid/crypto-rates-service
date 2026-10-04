@@ -1,6 +1,7 @@
 package bybit
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,7 +12,7 @@ import (
 	"krypto-proekt/internal/interfaces"
 )
 
-// BybitClient ходит на биржу за текущими ценами BTC и ETH.
+// BybitClient ходит на биржу за текущими ценами монет из domain.SupportedCoins.
 type BybitClient struct {
 	httpClient *http.Client
 	baseURL    string
@@ -38,24 +39,29 @@ type bybitResponse struct {
 	} `json:"result"`
 }
 
-func (c *BybitClient) Fetch() ([]domain.Rate, error) {
+// Fetch забирает все монеты из domain.SupportedCoins одним проходом.
+// Оба снимка получают одно время: это один проход тикера, а не два разных.
+func (c *BybitClient) Fetch(ctx context.Context) ([]domain.Rate, error) {
 	now := time.Now()
-	btc, err := c.lastPrice("BTCUSDT")
-	if err != nil {
-		return nil, fmt.Errorf("BTC: %w", err)
+	rates := make([]domain.Rate, 0, len(domain.SupportedCoins))
+	for _, coin := range domain.SupportedCoins {
+		price, err := c.lastPrice(ctx, coin+"USDT")
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", coin, err)
+		}
+		rates = append(rates, domain.Rate{CoinSymbol: coin, PriceUSD: price, FetchedAt: now})
 	}
-	eth, err := c.lastPrice("ETHUSDT")
-	if err != nil {
-		return nil, fmt.Errorf("ETH: %w", err)
-	}
-	return []domain.Rate{
-		{CoinSymbol: "BTC", PriceUSD: btc, FetchedAt: now},
-		{CoinSymbol: "ETH", PriceUSD: eth, FetchedAt: now},
-	}, nil
+	return rates, nil
 }
 
-func (c *BybitClient) lastPrice(symbol string) (float64, error) {
-	response, err := c.httpClient.Get(c.baseURL + symbol)
+// lastPrice делает один запрос по символу биржи и достаёт последнюю цену в долларах.
+// Запрос привязан к контексту: Ctrl+C обрывает поход на биржу, а не ждёт таймаут.
+func (c *BybitClient) lastPrice(ctx context.Context, symbol string) (float64, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+symbol, nil)
+	if err != nil {
+		return 0, err
+	}
+	response, err := c.httpClient.Do(request)
 	if err != nil {
 		return 0, err
 	}
