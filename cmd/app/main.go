@@ -35,12 +35,12 @@ type App struct {
 
 // main отвечает только за код выхода процесса.
 func main() {
-	app, err := newApp()
-	if err != nil {
+	app := &App{}
+	if err := app.newApp(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := run(app); err != nil {
+	if err := app.run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -48,15 +48,15 @@ func main() {
 
 // newApp - Composition Root: собирает все зависимости и компоненты.
 // Здесь происходит вся инициализация: конфиг, логгер, пул БД, сервис, HTTP-сервер.
-func newApp() (*App, error) {
+func (a *App) newApp() error {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, fmt.Errorf("конфиг: %w", err)
+		return fmt.Errorf("конфиг: %w", err)
 	}
 
 	log, appLog, closeLog, err := logger.New(cfg.LogLevel, cfg.LogFile)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	ctx := context.Background()
@@ -64,12 +64,12 @@ func newApp() (*App, error) {
 	pool, err := pgxpool.New(ctx, cfg.PostgresURL)
 	if err != nil {
 		closeLog()
-		return nil, fmt.Errorf("не удалось открыть postgres: %w", err)
+		return fmt.Errorf("не удалось открыть postgres: %w", err)
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		closeLog()
-		return nil, fmt.Errorf("postgres не отвечает: %w", err)
+		return fmt.Errorf("postgres не отвечает: %w", err)
 	}
 
 	svc := usecase.NewService(
@@ -81,30 +81,26 @@ func newApp() (*App, error) {
 	if err := svc.Refresh(ctx); err != nil {
 		pool.Close()
 		closeLog()
-		return nil, fmt.Errorf("первое обновление: %w", err)
+		return fmt.Errorf("первое обновление: %w", err)
 	}
 
-	httpServer := &http.Server{
+	a.httpServer = &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpserver.New(svc),
+		Handler:           httpserver.New(a.svc),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	a.log = log
+	a.pool = pool
+	a.botToken = cfg.TelegramBotToken
+	a.updateInt = cfg.UpdateInterval
 	log.Info("сервис собран", zap.String("http", cfg.HTTPAddr), zap.String("лог", cfg.LogFile))
-
-	return &App{
-		log:        log,
-		pool:       pool,
-		svc:        svc,
-		httpServer: httpServer,
-		botToken:   cfg.TelegramBotToken,
-		updateInt:  cfg.UpdateInterval,
-	}, nil
+	return nil
 }
 
 // run - только запуск компонентов и graceful stop по сигналу.
 // Инициализации нет: всё собрано в newApp.
-func run(app *App) error {
+func (a *App) run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -114,7 +110,7 @@ func run(app *App) error {
 	go func() {
 		select {
 		case <-signals:
-			app.log.Info("получен сигнал, останавливаемся")
+			a.log.Info("получен сигнал, останавливаемся")
 			cancel()
 		case <-ctx.Done():
 		}
@@ -124,14 +120,14 @@ func run(app *App) error {
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		app.svc.Start(ctx, app.updateInt)
+		a.svc.Start(ctx, a.updateInt)
 	}()
 
-	waitBot := telegram.Start(ctx, app.svc, app.botToken)
+	waitBot := telegram.Start(ctx, a.svc, a.botToken)
 
 	serveErr := make(chan error, 1)
 	go func() {
-		if err := app.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := a.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 		}
 	}()
@@ -140,20 +136,20 @@ func run(app *App) error {
 	select {
 	case <-ctx.Done():
 	case serveFailure = <-serveErr:
-		app.log.Error("http упал", zap.Error(serveFailure))
+		a.log.Error("http упал", zap.Error(serveFailure))
 	}
 	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-	if err := app.httpServer.Shutdown(shutdownCtx); err != nil {
-		app.log.Error("http shutdown", zap.Error(err))
+	if err := a.httpServer.Shutdown(shutdownCtx); err != nil {
+		a.log.Error("http shutdown", zap.Error(err))
 	}
 
 	waitBot()
 	workers.Wait()
 
-	app.pool.Close()
+	a.pool.Close()
 
 	if serveFailure != nil {
 		return fmt.Errorf("http: %w", serveFailure)
